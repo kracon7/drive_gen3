@@ -12,15 +12,21 @@ from std_msgs.msg import Int32, Int16MultiArray
 from math import pi
 from math import sin, cos
 
-class ArmControllerDemo:
+from action import ActionSpace
+
+class ArmController:
     
-    def __init__(self):
+    def __init__(self, args):
     
         rospy.init_node('demo_arm_controller')
         
         self.HOME_ACTION_IDENTIFIER = 2
         self.HOME_CONFIG = [0,15,180,230,0,55,90]
         self.config = [0,15,180,230,0,55,90]
+        self.action_space = ActionSpace(dp=args.act_mag)
+        self.action_keys = {'a':'left', 'd':'right', 'w':'forward', 's':'backward', 'q':'up', 'e':'down'}
+        
+        self.args = args
         
         self.robot_name = rospy.get_param('~robot_name',"my_gen3")
         self.degrees_of_freedom = rospy.get_param("/" + self.robot_name + "/degrees_of_freedom", 7)
@@ -255,41 +261,56 @@ class ArmControllerDemo:
         return pose
 
 
+	def keyboard_cb(self, data):
+	    # # Robot cartesian space controller
+	    # global ex
+	    c = data.data   # c type is int
+	    if chr(c) in self.action_keys.keys():
+	    	current_pose = self.feedback_pose_abs()
 
-def keyboard_cb(data):
-    # Robot cartesian space controller
-    global ex
-    c = data.data   # c type is int
-    print type(c)
+	    	key = self.action_keys[chr(c)]
+	    	dp = self.action_space[key]
+	    	theta = [0, 0, 0]
+
+	    	if current_pose[2] + dp[2] < args.zlb:
+	    		print('Target pose unsafe!')
+	    	else:
+			    self.send_cartesian_pose(self, dp, theta, speed_trans=0.01, speed_orient=5, sleep_time=4)
+		elif chr(c) is 't':
+			# add terminal timestamp
+		else:
+			print('No such action key available!')
 
 
-'''
-First,
-Initialize the Gen3 cartesian space controler
-
-'''
-ex = ArmControllerDemo()
-ex.clear_faults()
-ex.set_cartesian_reference_frame()   
-task_home = [0.34, 0.05, 0.163, 180, 0, 90]
-ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=20)
              
         
 def main(args):
+	'''
+	First,
+	Initialize the Gen3 cartesian space controler
+
+	'''
+	ex = ArmController(args)
+	ex.clear_faults()
+	ex.set_cartesian_reference_frame()   
+	task_home = [0.34, 0.05, 0.163, 180, 0, 90]
+	ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=20)
 
     rate=rospy.Rate(50)
     nSec_prev = rospy.get_rostime().nsecs
     Sec_prev = rospy.get_rostime().secs
 
-    rospy.Subscriber("keyboard_pub", Int32, keyboard_cb)
+    rospy.Subscriber("keyboard_pub", Int32, ex.keyboard_cb)
+
     while not rospy.is_shutdown():
         rate.sleep()
                 
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')
-    parser.add_argument('--act_mag', default=0.06, type=float, help='robot action magnitude')
-    parser.add_argument('--output_path', default='openloop_result.txt', help='file to store openloop test results')
+    parser.add_argument('--act_mag', default=0.03, type=float, help='robot action magnitude')
+    parser.add_argument('--zlb', default=0.03, type=float, help='lower bound of z for safe zone')
+    parser.add_argument('--output_path', default='traj_log_1.txt', help='file to store openloop test results')
     args = parser.parse_args()
     
     main(args)
