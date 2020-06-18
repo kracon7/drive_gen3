@@ -10,6 +10,9 @@ from kortex_driver.msg import *
 from sensor_msgs.msg import JointState
 from math import pi
 from math import sin, cos
+import datetime as dt
+import numpy as np
+import numpy.linalg as la
 
 class ArmControllerDemo:
     
@@ -255,100 +258,79 @@ class ArmControllerDemo:
         
         
 def main(args):
-    task_home = input('Please input task home pose')
-
+    stand_by = [0.351, 0, 0.13, 180, 0, 90]
+    task_home = [0.351, 0.099, 0.021, 180, 0, 90]
+# 0.014, 0.05, 
     ex = ArmControllerDemo()
     
-    #*******************************************************************************
-    # Make sure to clear the robot's faults else it won't move if it's already in fault
     ex.clear_faults()
-    #*******************************************************************************
-
-    #*******************************************************************************
-    # Move the robot to the Home position with an Action
-    ex.home_the_robot(sleep_time=5)
-    #*******************************************************************************
-    
-    #*******************************************************************************
-    # Set the reference frame to "Mixed"
+    # ex.home_the_robot(sleep_time=5)
     ex.set_cartesian_reference_frame()
     #*******************************************************************************    
+    # action magnitude
+    # R = args.act_mag
+    f = open(args.output_path, 'a')
 
     while True:
         user_response = raw_input("Send EE to task home position? y/n")
-        if user_response is 'y' or 'Y':
-            ex.send_cartesian_pose_abs([task_home[0], task_home[1], task_home[2]], [task_home[3], task_home[4], task_home[5]],sleep_time=20)
-            ex.send_cartesian_pose([0,0,-0.01], [0,0,0], sleep_time=5)
-            theta = float(input('Please enter theta_x for peeling in degree'))
-            R = float(input('How many centimeter would you like to move?'))
+        
+        if user_response == 'y' or user_response == 'Y':
+            ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=10)
+            
+            theta = float(input('Please enter theta_x for peeling in degree: '))
+            R = float(input('Please enter action length in unit of cm: '))
+            
             if theta > 170 or theta < 10:
                 rospy.loginfo("Theta out of bound, please re-enter")
                 continue
             else:
-                dx = R * cos(theta/180*pi) / 100
+                
+                dy = R * cos(theta/180*pi) / 100
                 dz = R * sin(theta/180*pi) / 100
-                print("moving EE to position ({}, 0, {})".format(dx, dz))
-                ex.send_cartesian_pose([dx,0,dz], [0,0,0], sleep_time=15)
+                print("moving EE to position (0, {}, {})".format(dy, dz))
+                f.write('theta: {}\n'.format(theta))
+
+                # write timestamp
+                now = dt.datetime.now()
+                f.write('time: {}/{} {}:{}:{},{}\n'
+                    .format(now.month, now.day, now.hour, now.minute, now.second, now.microsecond))
+
+                # write position
+                current_pose = ex.feedback_pose_abs()
+                f.write('position: {}\n'.format(current_pose[:3]))
+
+                # execution of action
+                v = 0.01
+                t = (R+2)/v /100 # unit   R: cm  v: m/s
+                print(t)
+                ex.send_cartesian_pose([0,dy,dz], [0,0,0], speed_trans=v, speed_orient=5, sleep_time=t)
+
+                # write timestamp
+                now = dt.datetime.now()
+                f.write('time: {}/{} {}:{}:{},{}\n'
+                    .format(now.month, now.day, now.hour, now.minute, now.second, now.microsecond))
+
+                # write position if successful execution
+                if la.norm(np.array(ex.feedback_pose_abs()) - np.array(current_pose)) * 100 / R < 0.5:
+                    f.write('unsuccesssful execution\n')
+                else:
+                    current_pose = ex.feedback_pose_abs() 
+                    f.write('position: {}\n'.format(current_pose[:3]))
+
             
-        elif user_response is 'n' or 'N':
-            break
+        elif user_response == 'n' or user_response == 'N':
+            ex.send_cartesian_pose_abs(stand_by[:3], stand_by[3:],sleep_time=10)
         else:
-            continue
-    
-    # #*******************************************************************************
-    # # Cartesian space movement demo
-    # ex.send_cartesian_pose([0,0,0.1], [0,0,0],sleep_time=3)
-    # ex.send_cartesian_pose([0,0,-0.2], [0,0,0],sleep_time=3)
-    # ex.home_the_robot(sleep_time=3)
-    
-    # ex.send_cartesian_pose([0.1,0,0], [0,0,0],sleep_time=3)
-    # ex.send_cartesian_pose([-0.2,0,0], [0,0,0],sleep_time=3)
-    # ex.home_the_robot(sleep_time=3)
-    
-    # ex.send_cartesian_pose([0,0,0], [90,0,0], speed_orient=45, sleep_time=23)
-    # ex.home_the_robot(sleep_time=10)
-    
-    # ex.send_cartesian_pose([0,0,0], [-30,0,0], speed_orient=45, sleep_time=8)
-    # ex.home_the_robot(sleep_time=5)
-    # #*******************************************************************************
-    
-    # #*******************************************************************************
-    # # Cartesian space movement demo, controlled by absulote pose
-    # ex.send_cartesian_pose_abs([0.5,0,0.4],[90,0,180],sleep_time=20)
-    # #*******************************************************************************
-    
-    # #*******************************************************************************
-    # # Joint space movement demo
-    # # Rotate the manipulator by 45 degree
-    # config = ex.HOME_CONFIG
-    # config[0] = config[0]+45
-    # ex.send_joint_angles_abs(config)
-    
-    # ex.send_joint_angles_rot([-15,0,0,0,0,0,0],sleep_time=3)
-    # #*******************************************************************************
-    
-    # #*******************************************************************************
-    # # Gripper demo
-    # # rospy.loginfo("Gripper present status... %s", self.is_gripper_present)
-    # ex.send_gripper_status(0.5)
-    # ex.send_gripper_status(1)
-    # #*******************************************************************************
-    
-    # ex.home_the_robot(init_gripper=True)
-    
+            break
+
+    f.close()
+
                 
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')
-    parser.add_argument('--render', default=False, type = bool, help='render simulation')
-    parser.add_argument('--case', default=1, help='case number')
-    parser.add_argument('--num_try', default=1, type = int, help='number of try per test case') 
-    parser.add_argument('--break_thresh', default=0.06, type=float, help='velcro breaking threshold')
-    parser.add_argument('--act_mag', default=0.06, type=float, help='robot action magnitude')
-    parser.add_argument('--grip', default=300, type=int, help='grip force in each action excution')
-    parser.add_argument('--max_iterations', default=30, type=int, help='grip force in each action excution')
-    parser.add_argument('--num_tendon', default=216, type=int, help='total number of tendons')
-    parser.add_argument('--output_path', default='openloop_result.txt', help='file to store openloop test results')
+    parser.add_argument('--act_mag', default=0.2, type=float, help='robot action magnitude, unit is cm')
+    parser.add_argument('--output_path', default='/home/jc/logs/realrobot/thetapeel.txt', help='file to store openloop test results')
     args = parser.parse_args()
     
     main(args)

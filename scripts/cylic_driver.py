@@ -284,7 +284,7 @@ class ArmController:
                 f.close()
 
                 # execute action
-                self.send_cartesian_pose(dp, theta, speed_trans=0.03, speed_orient=5, sleep_time=1.5)
+                self.send_cartesian_pose(dp, theta, speed_trans=0.005, speed_orient=5, sleep_time=3)
                 rospy.loginfo("Finished sending the robot to the cartesian pose")  
 
                 # log time and ee_pose again
@@ -324,7 +324,7 @@ def main(args):
     ex = ArmController(args)
     ex.clear_faults()
     ex.set_cartesian_reference_frame()   
-    task_home = [0.351, 0, 0.025, 180, 0, 90]
+    task_home = [0.356, -0.016, 0.044, 180, 0, 90]
     ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=10)
     rospy.loginfo("Finished sending the robot to the cartesian pose")    
 
@@ -348,7 +348,7 @@ def main(args):
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')
-    parser.add_argument('--act_mag', default=0.015, type=float, help='robot action magnitude')
+    parser.add_argument('--act_mag', default=0.04, type=float, help='robot action magnitude')
     parser.add_argument('--zlb', default=0.02, type=float, help='lower bound of z for safe zone')
     parser.add_argument('--output_path', default='/home/jc/logs/realrobot/traj_log_1.txt', help='file to store openloop test results')
     args = parser.parse_args()
