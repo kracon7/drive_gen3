@@ -21,7 +21,7 @@ def main(args):
     Initialize the Gen3 cartesian space controler
 
     '''
-    
+    rospy.init_node('demo_velocity_controller')
     rate=rospy.Rate(50)
     twist_pub = rospy.Publisher('my_gen3/in/cartesian_velocity', TwistCommand, queue_size=1)
     twist_msg = TwistCommand()
