@@ -2,8 +2,11 @@
 import os
 import sys
 import argparse
-
+import serial
+import ctypes
+import multiprocessing
 import rospy
+import numpy as np
 from kortex_driver.srv import *
 from kortex_driver.msg import *
 
@@ -13,7 +16,41 @@ from math import pi
 from math import sin, cos
 import time
 
-             
+FORCE_LOG = [[0., 0., 0.]]
+# set up serial port
+port = '/dev/ttyACM0'
+arduino_port = serial.Serial(port,9600,timeout=5)
+shared_array_base = multiprocessing.Array(ctypes.c_double, 3*1)
+shared_array = np.ctypeslib.as_array(shared_array_base.get_obj())
+shared_array = shared_array.reshape(1, 3)
+
+
+def write_twist_msg(twist_msg, ref_frame=0, twist=[0.,0.,0.,0.,0.,0.], duration=0):
+    twist_msg.reference_frame = ref_frame
+    twist_msg.twist.linear_x = twist[0]
+    twist_msg.twist.linear_y = twist[1]
+    twist_msg.twist.linear_z = twist[2]
+    twist_msg.twist.angular_x = twist[3]
+    twist_msg.twist.angular_y = twist[4]
+    twist_msg.twist.angular_z = twist[5]
+    twist_msg.duration = duration
+
+def read_force(arduino_port):
+    # read message from arduino port to extract forces and cast into float
+    msg = ''
+    while len(msg) < 10 or 'HX711' in msg or len(msg.split())<3:
+        msg = arduino_port.readline()
+    forces = msg.split()
+    rospy.loginfo('Arduino message: '+msg.rstrip())
+    fx, fy, fz = forces
+    return [float(fx), float(fy), float(fz)]
+
+def arduino_process(def_param=shared_array):
+    while True:
+        fx, fy, fz = read_force(arduino_port)
+        shared_array[0,0] = fx
+        shared_array[0,1] = fy
+        shared_array[0,2] = fz
         
 def main(args):
     '''
@@ -22,41 +59,41 @@ def main(args):
 
     '''
     rospy.init_node('demo_velocity_controller')
-    rate=rospy.Rate(50)
+    rate=rospy.Rate(5)
     twist_pub = rospy.Publisher('my_gen3/in/cartesian_velocity', TwistCommand, queue_size=1)
     twist_msg = TwistCommand()
     
+    p = multiprocessing.Process(target=arduino_process, args=())
+    p.start()
+    time.sleep(1)
+
     time_start = time.time()
 
     while not rospy.is_shutdown():
         time_now = time.time()
+        # read force sensor message
+        fx, fy, fz = shared_array[-1]
+        force_mag = fx**2 + fy**2 + fz**2
+        rospy.loginfo('Force magnitude: {}'.format(force_mag))
+
+        # write_twist_msg(twist_msg, 0, [0.01, 0.01, 0.01, 0., 0., 0.], 0)
+
         # move end effector when t < 2
-        if time_now - time_start < 2:
+        if time_now - time_start < 15:
             rospy.loginfo('Moving End Effector.')
-            twist_msg.reference_frame = 0
-            twist_msg.twist.linear_x = 0.02
-            twist_msg.twist.linear_y = 0.02
-            twist_msg.twist.linear_z = 0.02
-            twist_msg.twist.angular_x = 0
-            twist_msg.twist.angular_y = 0
-            twist_msg.twist.angular_z = 0
-            twist_msg.duration = 0 
-            twist_pub.publish(twist_msg)
+            write_twist_msg(twist_msg, 0, [0.01, 0.01, 0.01, 0., 0., 0.], 0)
         # stop the ene effector
         else:
             rospy.loginfo('Stopped End Effector.')
-            twist_msg.reference_frame = 0
-            twist_msg.twist.linear_x = 0
-            twist_msg.twist.linear_y = 0
-            twist_msg.twist.linear_z = 0
-            twist_msg.twist.angular_x = 0
-            twist_msg.twist.angular_y = 0
-            twist_msg.twist.angular_z = 0
-            twist_msg.duration = 0 
-            twist_pub.publish(twist_msg)
+            write_twist_msg(twist_msg, 0, [0, 0, 0, 0., 0., 0.], 0)
+        
+        if force_mag > 2:
+            write_twist_msg(twist_msg, 0, [0, 0, 0, 0., 0., 0.], 0)
+
+        twist_pub.publish(twist_msg)
         rate.sleep()
 
-    print('here')
+    p.terminate()
                 
         
 if __name__ == "__main__":
