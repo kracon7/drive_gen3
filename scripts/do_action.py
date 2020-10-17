@@ -16,7 +16,12 @@ from math import pi
 from math import sin, cos
 import time
 
-FORCE_LOG = [[0., 0., 0.]]
+ACTIONS =  {'r': [ 0, -1,  0,  0,  0,  0],
+            'l': [ 0,  1,  0,  0,  0,  0],
+            'f': [ 1,  0,  0,  0,  0,  0],
+            'b': [-1,  0,  0,  0,  0,  0],
+            'u': [ 0,  0,  1,  0,  0,  0],
+            'd': [ 0,  0, -1,  0,  0,  0]}
 # set up serial port
 port = '/dev/ttyACM0'
 arduino_port = serial.Serial(port,9600,timeout=5)
@@ -72,8 +77,8 @@ def main(args):
     Initialize the Gen3 cartesian space controler
 
     '''
-    rospy.init_node('demo_velocity_controller')
-    rate=rospy.Rate(5)
+    rospy.init_node('velocity_controller')
+    rate=rospy.Rate(10)
     twist_pub = rospy.Publisher('my_gen3/in/cartesian_velocity', TwistCommand, queue_size=1)
     twist_msg = TwistCommand()
     
@@ -81,34 +86,51 @@ def main(args):
     p.start()
     time.sleep(4)
 
+    # check current tool pose and check validity of action
     robot_name = rospy.get_param('~robot_name',"my_gen3")
     tool_pose = feedback_pose_abs(robot_name)
     rospy.loginfo('Current tool pose: {}'.format(tool_pose))
+    # get twist action
+    if ACTIONS.has_key(args.action):
+        twist = args.velocity * np.array(ACTIONS[args.action])
+    else:
+        rospy.loginfo('ERROR: action key not exist.')
+        twist = [0, 0, 0, 0, 0, 0]
+    # calculate z after execution
+    z_after = tool_pose[2] + twist[2] * args.time_lim
+    if z_after > args.zlb:
+        unsafe = False
+    else:
+        unsafe = True
+
 
     time_start = time.time()
 
     while not rospy.is_shutdown():
-        time_now = time.time()
-        # read force sensor message
-        fx, fy, fz = shared_array[-1]
-        force_mag = fx**2 + fy**2 + fz**2
-        rospy.loginfo('Force magnitude: {}'.format(force_mag))
 
         # write_twist_msg(twist_msg, 0, [0.01, 0.01, 0.01, 0., 0., 0.], 0)
 
-        # move end effector when t < 2
-        if time_now - time_start < 15:
-            rospy.loginfo('Moving End Effector.')
-            write_twist_msg(twist_msg, 0, [0., 0.0, 0.01, 0., 0., 0.], 0)
+        # move end effector before timeout
+        time_now = time.time()
+        if not unsafe and time_now - time_start < args.time_lim:
+            # rospy.loginfo('Moving End Effector.')
             tool_pose = feedback_pose_abs(robot_name)
-            rospy.loginfo('Current tool pose: {}'.format(tool_pose))
-
+            rospy.loginfo('Moving End Effector. Current tool pose z: {}'.format(tool_pose[2]))
+            write_twist_msg(twist_msg, 0, twist, 0)
         # stop the ene effector
         else:
             rospy.loginfo('Stopped End Effector.')
             write_twist_msg(twist_msg, 0, [0, 0, 0, 0., 0., 0.], 0)
+            twist_pub.publish(twist_msg)
+            p.terminate()
+            break
         
-        if force_mag > 7:
+        # read force sensor message
+        fx, fy, fz = shared_array[-1]
+        force_mag = fx**2 + fy**2 + fz**2
+        # rospy.loginfo('Force magnitude: {}'.format(force_mag))
+        # if force exceed limit, send zero velocity command
+        if force_mag > args.force_lim:
             write_twist_msg(twist_msg, 0, [0, 0, 0, 0., 0., 0.], 0)
 
         twist_pub.publish(twist_msg)
@@ -119,8 +141,11 @@ def main(args):
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')
-    parser.add_argument('--act_mag', default=0.015, type=float, help='robot action magnitude')
-    parser.add_argument('--zlb', default=0.02, type=float, help='lower bound of z for safe zone')
+    parser.add_argument('--velocity', default=0.01, type=float, help='cartesian velocity of end effector')
+    parser.add_argument('--time_lim', default=5, type=float, help='robot action magnitude')
+    parser.add_argument('--zlb', default=0.04, type=float, help='lower bound of z for safe zone')
+    parser.add_argument('--force_lim', default=4, type=float, help='tactile force limit')
+    parser.add_argument('--action', default='u', type=str, help='action type, left right forward backward up down')
     parser.add_argument('--output_path', default='/home/jc/logs/realrobot/traj_log_1.txt', help='file to store openloop test results')
     args = parser.parse_args()
     
