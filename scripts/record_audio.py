@@ -3,11 +3,10 @@ import os
 import argparse
 import pyaudio
 import wave
-
-import librosa
 import numpy as np
-import matplotlib.pyplot as plt
-import librosa.display
+# import matplotlib.pyplot as plt
+# import librosa
+# import librosa.display
 
 def record(time, out_path):
 	CHUNK = 1024
@@ -62,23 +61,23 @@ def analyze_audio(audio_path, feature_wf):
 
 
 def main(args):
-	out_path = os.path.join(args.out_dir, '{}_{}.wav'.format(args.episode, args.step))
+	out_path = os.path.join(args.out_dir, '{}_{}.wav'.format(args.epoch, args.episode))
 	record(args.time, out_path)
 	feature_wf = np.load('./spectrum.npy')
-	reward = analyze_audio(out_path, feature_wf)
-	f = open('/home/jc/logs/real_robot/reward.txt', 'a+')
-	f.write('{}  {}  {}\n'.format(args.episode, args.step, reward))
-	f.close()
+	# reward = analyze_audio(out_path, feature_wf)
+	# f = open('/home/jc/logs/real_robot/reward.txt', 'a+')
+	# f.write('{}  {}  {}\n'.format(args.epoch, args.episode, reward))
+	# f.close()
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Record audio signal')
-    parser.add_argument('--out_dir', default='/home/jc/logs/real_robot', help='output file path')
+    parser.add_argument('--out_dir', default='/home/jc/logs/realrobot', help='output file path')
     parser.add_argument('-t', '--time', default=5, type=int, help='lenght of time recording, in seconds')
     parser.add_argument('--n_channel', default=1, type=int, help='number of channels') 
-    parser.add_argument('--episode', type=int, help='number of episode')
-    parser.add_argument('--step', type=int, help='number of step in and episode')   
+    parser.add_argument('--epoch', type=int, help='number of epoch')
+    parser.add_argument('--episode', type=int, help='number of episode in and epoch')   
 
     args = parser.parse_args()
     
