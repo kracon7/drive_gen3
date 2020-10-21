@@ -3,6 +3,7 @@ import os
 import argparse
 import pyaudio
 import wave
+import time as tm
 import numpy as np
 # import matplotlib.pyplot as plt
 # import librosa
@@ -24,7 +25,7 @@ def record(time, out_path):
 	                input=True,
 	                frames_per_buffer=CHUNK)
 
-	print("* recording")
+	print("{}: * recording".format(tm.time()))
 
 	frames = []
 

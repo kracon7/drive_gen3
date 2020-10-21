@@ -29,8 +29,11 @@ ACTION_START_TIME = 0
 ACTION_KEY = 'none'
 NUM_EPOCH = 0
 NUM_EPISODE = 0
-CSV_FILE = None
-CSV_WRITER = None
+FORCE_CSV_FILE = None
+FORCE_CSV_WRITER = None
+TRAJ_CSV_FILE = None
+TRAJ_CSV_WRITER = None
+FAILED_ACTIONS = None
 
 # set up serial port
 port = '/dev/ttyACM0'
@@ -70,28 +73,6 @@ def feedback_pose_abs(robot_name):
     pose = pose + [base.tool_pose_theta_x, base.tool_pose_theta_y, base.tool_pose_theta_z]
     return pose
 
-def keyboard_cb(data, output_dir):
-    global ACTION_KEY
-    global ACTION_START_TIME
-    global NUM_EPOCH
-    global NUM_EPISODE
-    global CSV_FILE
-    global CSV_WRITER
-
-    c = data.data   # c type is int
-    if ACTIONS.has_key(chr(c)):
-        rospy.loginfo('Recieved action command {}'.format(chr(c)))
-        ACTION_START_TIME = time.time()
-        ACTION_KEY = chr(c)
-        NUM_EPISODE += 1
-    elif chr(c) == 'n':
-        # new epoch, reset number of epoch and episode
-        NUM_EPOCH += 1
-        NUM_EPISODE = 0
-    else:
-        rospy.loginfo('ERROR: Unrecognized action command.')
-        ACTION_KEY = 'none'
-
 def write_twist_msg(twist_msg, ref_frame=0, twist=[0.,0.,0.,0.,0.,0.], duration=0):
     twist_msg.reference_frame = ref_frame
     twist_msg.twist.linear_x = twist[0]
@@ -101,13 +82,68 @@ def write_twist_msg(twist_msg, ref_frame=0, twist=[0.,0.,0.,0.,0.,0.], duration=
     twist_msg.twist.angular_y = twist[4]
     twist_msg.twist.angular_z = twist[5]
     twist_msg.duration = duration
-  
+
+def keyboard_cb(data, cb_args):
+    global ACTION_KEY
+    global ACTION_START_TIME
+    global NUM_EPOCH
+    global NUM_EPISODE
+    global FORCE_CSV_FILE
+    global FORCE_CSV_WRITER
+
+    args = cb_args[0]
+    time_lim = args.time_lim
+    zlb = args.zlb
+    velocity = args.velocity
+    ex = cb_args[1]
+    tool_z = ex.feedback_pose_abs()[2]
+
+    time_now = time.time()
+    if time_now > ACTION_START_TIME and time_now < (ACTION_START_TIME+time_lim):
+        rospy.loginfo('Actions must be given at least {}s after the last one'.format(time_lim))
+    else:
+        c = data.data   # c type is int
+        if ACTIONS.has_key(chr(c)):
+            rospy.loginfo('Recieved action command {}'.format(chr(c)))
+            dz = ACTIONS[chr(c)][2] * velocity * time_lim
+            if tool_z + dz > zlb:
+                rospy.loginfo('Valid action')
+                ACTION_START_TIME = time.time()
+                ACTION_KEY = chr(c)
+                NUM_EPISODE += 1
+            else:
+                rospy.loginfo('Action unsafe')
+        elif chr(c) == 'n':
+            # new epoch, reset number of epoch and episode
+            NUM_EPOCH += 1
+            NUM_EPISODE = 0
+        else:
+            rospy.loginfo('ERROR: Unrecognized action command.')
+            ACTION_KEY = 'none'
+ 
+def reset_velcro(ex, task_home=[0.483, -0.158, 0.251, 180, 0, 90]):
+    user_response = raw_input("Send tool to task home position? y/n")
+    if user_response == 'y' or user_response == 'Y':
+        ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=8)
+        pose_sequence = [[0.483, -0.076, 0.251],
+                         [0.483, -0.026, 0.180],
+                         [0.483,  0.046, 0.161],
+                         [0.483,  0.063, 0.131],
+                         [0.483,  0.071, 0.105],
+                         [0.483,  0.066, 0.073]]
+        for pose in pose_sequence:
+            ex.send_cartesian_pose_abs(pose, task_home[3:], sleep_time=2)
+
+def publish_action(twist_pub, twist_msg, velocity, action_key):
+    global ACTIONS
+    twist = velocity * np.array(ACTIONS[action_key])
+    write_twist_msg(twist_msg, 0, twist, 0)
+    twist_pub.publish(twist_msg)
+
 
 class ArmController:
     
     def __init__(self, args):
-    
-        rospy.init_node('demo_arm_controller')
         
         self.HOME_ACTION_IDENTIFIER = 2
         self.HOME_CONFIG = [0,15,180,230,0,55,90]
@@ -347,57 +383,6 @@ class ArmController:
         pose = pose + [base.tool_pose_theta_x, base.tool_pose_theta_y, base.tool_pose_theta_z]
         return pose
 
-
-    def keyboard_cb(self, data, output_path):
-        # # Robot cartesian space controller
-        # global ex
-        c = data.data   # c type is int
-        if chr(c) in self.action_keys.keys():
-            current_pose = self.feedback_pose_abs()
-
-            key = self.action_keys[chr(c)]
-            dp = self.action_space.actions[key]
-            theta = [0, 0, 0]
-
-            if current_pose[2] + dp[2] < args.zlb:
-                print('Target pose unsafe!')
-            else:
-                # log time and ee_pose before action starts
-                now = dt.datetime.now()
-                with open(output_path, 'a') as f:
-                    f.write('{} {}:{}:{},{} action {} starts\n'.format(now.day, now.hour, now.minute, now.second, now.microsecond, key))
-                    f.write('                   End effector now at {}\n'.format(current_pose))
-                f.close()
-
-                # execute action
-                self.send_cartesian_pose(dp, theta, speed_trans=0.03, speed_orient=5, sleep_time=1.5)
-                rospy.loginfo("Finished sending the robot to the cartesian pose")  
-
-                # log time and ee_pose again
-                current_pose = self.feedback_pose_abs()
-                now = dt.datetime.now()                
-                with open(output_path, 'a') as f:
-                    f.write('{} {}:{}:{},{} finished.\n'.format(now.day, now.hour, now.minute, now.second,now.microsecond, key))
-                    f.write('                   End effector now at {}\n'.format(current_pose))
-                f.close()
-
-        # Slippage time log
-        elif chr(c) is 'v':
-            rospy.loginfo("Slippage message recieved!")  
-            now = dt.datetime.now()
-            with open(output_path, 'a') as f:
-                f.write('{} {}:{}:{},{} Slipped!\n\n'.format(now.day, now.hour, now.minute, now.second, now.microsecond))
-            f.close()
-
-        elif chr(c) is 't':
-            rospy.loginfo("Termination message recieved!")
-            now = dt.datetime.now()
-            with open(output_path, 'a') as f:
-                f.write('{} {}:{}:{},{} Terminated!\n\n'.format(now.day, now.hour, now.minute, now.second, now.microsecond))
-            f.close()
-        else:
-            print('No such action key available!')
-
   
 def main(args):
     '''
@@ -405,37 +390,46 @@ def main(args):
     Initialize the Gen3 cartesian space controler
 
     '''
-    # ex = ArmController(args)
-    # ex.clear_faults()
-    # ex.set_cartesian_reference_frame()   
-    # task_home = [0.351, 0, 0.025, 180, 0, 90]
-    # ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=10)
-    # rospy.loginfo("Finished sending the robot to the cartesian pose")   
+    ex = ArmController(args)
+    ex.clear_faults()
+    ex.set_cartesian_reference_frame()
 
     global ACTION_KEY
     global ACTION_START_TIME 
     global NUM_EPOCH
+    NUM_EPOCH = args.start_epoch
     global NUM_EPISODE
-    global CSV_FILE
-    global CSV_WRITER
+    global FORCE_CSV_FILE
+    global FORCE_CSV_WRITER
+    global TRAJ_CSV_FILE
+    global TRAJ_CSV_WRITER
+    global FAILED_ACTIONS
+    FAILED_ACTIONS = {'key': ['none', 'none', 'none'], 
+            'force_mag': [args.force_lim, args.force_lim, args.force_lim]}
 
-    csv_all_rows = []
-    csv_row = []
-    t_epoch = 0
+    tool_start = [0.483,  0.066, 0.073]
+    force_csv_all_rows = []
+    force_csv_row = []
+    traj_csv_all_rows = [tool_start]
+    t_epoch = args.start_epoch
     t_episode = 0
-    CSV_FILE = open(os.path.join(args.output_dir, 'epoch_{}.csv'.format(NUM_EPOCH)), 'w')
-    CSV_WRITER = csv.writer(CSV_FILE, delimiter=',')
+    FORCE_CSV_FILE = open(os.path.join(args.output_dir, 'epoch_{}_force.csv'.format(NUM_EPOCH)), 'w')
+    FORCE_CSV_WRITER = csv.writer(FORCE_CSV_FILE, delimiter=',')
+    TRAJ_CSV_FILE = open(os.path.join(args.output_dir, 'epoch_{}_traj.csv'.format(NUM_EPOCH)), 'w')
+    TRAJ_CSV_WRITER = csv.writer(TRAJ_CSV_FILE, delimiter=',')
 
     rospy.init_node('velocity_controller')
     rate=rospy.Rate(10)
     twist_pub = rospy.Publisher('my_gen3/in/cartesian_velocity', TwistCommand, queue_size=1)
-    rospy.Subscriber("keyboard_pub", Int32, keyboard_cb, args.output_dir)
+    rospy.Subscriber("keyboard_pub", Int32, keyboard_cb, (args, ex))
     twist_msg = TwistCommand()
     
     # turn on the arduino process for force and resistance logging
     p = multiprocessing.Process(target=arduino_process, args=())
     p.start()
     time.sleep(4)
+
+    reset_velcro(ex)
 
     # check current tool pose and check validity of action
     robot_name = rospy.get_param('~robot_name',"my_gen3")
@@ -444,55 +438,88 @@ def main(args):
         
     while not rospy.is_shutdown():
         time_now = time.time()
-        
+        # check force magnitude
+        # read force sensor message
+        fx, fy, fz = shared_array[-1]
+        force_mag = fx**2 + fy**2 + fz**2
+
         # if we are still within the operation time window
         if time_now > ACTION_START_TIME and time_now < (ACTION_START_TIME+args.time_lim):
-            # check force magnitude
-            # read force sensor message
-            fx, fy, fz = shared_array[-1]
-            force_mag = fx**2 + fy**2 + fz**2
             # if force exceed limit, send zero velocity command
-            if force_mag > args.force_lim:
-                twist = args.velocity * np.array(ACTIONS['none'])
-                write_twist_msg(twist_msg, 0, twist, 0)
-                twist_pub.publish(twist_msg)
-                continue
+            if force_mag > args.force_lim and ACTION_KEY in FAILED_ACTIONS['key']:
+                # find the last failed attemp and compare the force magnitude
+                # continue with the action if the force_mag is smaller than last time
+                last_force_mag = max(FAILED_ACTIONS['force_mag'])
+                if force_mag < 0.9*last_force_mag:
+                    # print(force_mag, last_force_mag)
+                    publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
+                else:
+                    publish_action(twist_pub, twist_msg, args.velocity, 'none')
+            elif force_mag > args.force_lim and ACTION_KEY not in FAILED_ACTIONS['key']:
+                if time_now < (ACTION_START_TIME + 0.2):
+                    publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
+                else:
+                    publish_action(twist_pub, twist_msg, args.velocity, 'none')
             else:
-                twist = args.velocity * np.array(ACTIONS[ACTION_KEY])
-                write_twist_msg(twist_msg, 0, twist, 0)
-                twist_pub.publish(twist_msg)
+                publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
 
-            csv_row.append('{} {} {}'.format(fx, fy, fz))
+            force_csv_row.append('{} {} {}'.format(fx, fy, fz))
 
         # publish zero twist if the time is outside the operation time window
         else:
-            ACTION_KEY = 'none'
-            twist = args.velocity * np.array(ACTIONS[ACTION_KEY])
-            write_twist_msg(twist_msg, 0, twist, 0)
-            twist_pub.publish(twist_msg)
+            if ACTION_KEY is not 'none' and force_mag > args.force_lim:
+                # update the new failed action
+                FAILED_ACTIONS['key'].pop(0)
+                FAILED_ACTIONS['key'].append(ACTION_KEY)
+                FAILED_ACTIONS['force_mag'].pop(0)
+                FAILED_ACTIONS['force_mag'].append(force_mag)               
 
+            ACTION_KEY = 'none'
+            publish_action(twist_pub, twist_msg, args.velocity, 'none')
+
+        # new epoch
         if t_epoch == (NUM_EPOCH - 1) and NUM_EPISODE == 0:
             # write all csv rows from the last epoch
             rospy.loginfo('New epoch just begins, write csv and open a new one')
-            for row in csv_all_rows:
-                CSV_WRITER.writerow(row)
+            for row in force_csv_all_rows:
+                FORCE_CSV_WRITER.writerow(row)
             # close previous csv file and open new a new one
-            CSV_FILE.close()
-            CSV_FILE = open(os.path.join(args.output_dir, 'epoch_{}.csv'.format(NUM_EPOCH)), 'w')
-            CSV_WRITER = csv.writer(CSV_FILE, delimiter=',')
+            FORCE_CSV_FILE.close()
+            FORCE_CSV_FILE = open(os.path.join(args.output_dir, 'epoch_{}_force.csv'.format(NUM_EPOCH)), 'w')
+            FORCE_CSV_WRITER = csv.writer(FORCE_CSV_FILE, delimiter=',')
+            force_csv_all_rows = []
+
+            for row in traj_csv_all_rows:
+                TRAJ_CSV_WRITER.writerow(row)
+            TRAJ_CSV_FILE.close()
+            TRAJ_CSV_FILE = open(os.path.join(args.output_dir, 'epoch_{}_traj.csv'.format(NUM_EPOCH)), 'w')
+            TRAJ_CSV_WRITER = csv.writer(TRAJ_CSV_FILE, delimiter=',')
+            traj_csv_all_rows = [tool_start]
+
+            # reset the velcro by controlling the tool following a fixed trajectory
+            reset_velcro(ex)
             
             t_epoch += 1
-            t_episode = 0               
+            t_episode = 0  
 
+            # reset unsafe actions
+            FAILED_ACTIONS = {'key': ['none', 'none', 'none'], 
+                    'force_mag': [args.force_lim, args.force_lim, args.force_lim]}             
+
+        # new episode
         if time_now > (ACTION_START_TIME+args.time_lim) and t_epoch == NUM_EPOCH \
                          and t_episode == (NUM_EPISODE -1):
             print('writing new csv row')
-            csv_all_rows.append(csv_row)
+            force_csv_all_rows.append(force_csv_row)
             # clear csv row for next episode
-            csv_row = []
+            force_csv_row = []
+
+            traj_csv_all_rows.append(ex.feedback_pose_abs()[:3])
+
             t_episode += 1
 
         print(t_epoch, NUM_EPOCH, t_episode, NUM_EPISODE)
+        print(FAILED_ACTIONS['key'], FAILED_ACTIONS['force_mag'])
 
         # twist_pub.publish(twist_msg)
         rate.sleep()
@@ -501,15 +528,12 @@ def main(args):
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')
-    parser.add_argument('--act_mag', default=0.015, type=float, help='robot action magnitude')
     parser.add_argument('--output_dir', default='/home/jc/logs/realrobot', help='file to store openloop test results')
     parser.add_argument('--velocity', default=0.01, type=float, help='cartesian velocity of end effector')
     parser.add_argument('--time_lim', default=5, type=float, help='robot action magnitude')
-    parser.add_argument('--zlb', default=0.04, type=float, help='lower bound of z for safe zone')
-    parser.add_argument('--force_lim', default=4, type=float, help='tactile force limit')
+    parser.add_argument('--zlb', default=0.05, type=float, help='lower bound of z for safe zone')
+    parser.add_argument('--force_lim', default=250, type=float, help='tactile force limit')
+    parser.add_argument('--start_epoch', default=0, type=int, help='number of epoch to start recording')
     args = parser.parse_args()
     
     main(args)
-
-    
-
