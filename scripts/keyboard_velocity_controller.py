@@ -16,7 +16,7 @@ import datetime as dt
 from kortex_driver.srv import *
 from kortex_driver.msg import *
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Int32, Int16MultiArray
+from std_msgs.msg import Int32, Float32MultiArray
 
 ACTIONS =  {'r': [ 0, -1,  0,  0,  0,  0],
             'l': [ 0,  1,  0,  0,  0,  0],
@@ -121,24 +121,39 @@ def keyboard_cb(data, cb_args):
             rospy.loginfo('ERROR: Unrecognized action command.')
             ACTION_KEY = 'none'
  
-def reset_velcro(ex, task_home=[0.483, -0.158, 0.251, 180, 0, 90]):
+def reset_velcro(ex, task_home=[0.483, -0.24, 0.27, 180, 0, 90]):
     user_response = raw_input("Send tool to task home position? y/n")
     if user_response == 'y' or user_response == 'Y':
-        ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=8)
-        pose_sequence = [[0.483, -0.076, 0.251],
+        ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=6)
+        pose_sequence = [[0.483, -0.158, 0.251],
+                         [0.483, -0.076, 0.251],
                          [0.483, -0.026, 0.180],
                          [0.483,  0.046, 0.161],
                          [0.483,  0.063, 0.131],
                          [0.483,  0.071, 0.105],
+                         [0.483,  0.086, 0.091],
+                         [0.483,  0.091, 0.06],
                          [0.483,  0.066, 0.073]]
         for pose in pose_sequence:
-            ex.send_cartesian_pose_abs(pose, task_home[3:], sleep_time=2)
+            ex.send_cartesian_pose_abs(pose, task_home[3:], sleep_time=1.5)
 
 def publish_action(twist_pub, twist_msg, velocity, action_key):
     global ACTIONS
     twist = velocity * np.array(ACTIONS[action_key])
     write_twist_msg(twist_msg, 0, twist, 0)
     twist_pub.publish(twist_msg)
+
+def to_force_msg(csv_list):
+    '''
+    convert the list of csv blocks to ROS force message
+    Input:
+        csv_list -- list of strings ['1 2 3', '0 1 2']
+    '''
+    msg = []
+    for item in csv_list:
+        fx, fy, fz = item.split()
+        msg += [float(fx), float(fy), float(fz)]
+    return msg
 
 
 class ArmController:
@@ -423,6 +438,9 @@ def main(args):
     twist_pub = rospy.Publisher('my_gen3/in/cartesian_velocity', TwistCommand, queue_size=1)
     rospy.Subscriber("keyboard_pub", Int32, keyboard_cb, (args, ex))
     twist_msg = TwistCommand()
+
+    force_pub = rospy.Publisher('load_cell_force', Float32MultiArray, queue_size=1)
+    force_msg = Float32MultiArray()
     
     # turn on the arduino process for force and resistance logging
     p = multiprocessing.Process(target=arduino_process, args=())
@@ -449,18 +467,26 @@ def main(args):
             if force_mag > args.force_lim and ACTION_KEY in FAILED_ACTIONS['key']:
                 # find the last failed attemp and compare the force magnitude
                 # continue with the action if the force_mag is smaller than last time
-                last_force_mag = max(FAILED_ACTIONS['force_mag'])
-                if force_mag < 0.9*last_force_mag:
+                key_index = [i for i, x in enumerate(FAILED_ACTIONS['key']) if x == ACTION_KEY] 
+                key_forces = [FAILED_ACTIONS['force_mag'][i] for i in key_index]
+                last_force_mag = min(key_forces)
+                print(force_mag, last_force_mag)
+                if force_mag < 0.8 * last_force_mag:
                     # print(force_mag, last_force_mag)
+                    print('here 1')
                     publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
                 else:
+                    print('here 2')
                     publish_action(twist_pub, twist_msg, args.velocity, 'none')
             elif force_mag > args.force_lim and ACTION_KEY not in FAILED_ACTIONS['key']:
-                if time_now < (ACTION_START_TIME + 0.2):
+                if time_now < (ACTION_START_TIME + 0.3):
+                    print('here 3')
                     publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
                 else:
+                    print('here 4')
                     publish_action(twist_pub, twist_msg, args.velocity, 'none')
             else:
+                print('here 5')
                 publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
 
             force_csv_row.append('{} {} {}'.format(fx, fy, fz))
@@ -510,6 +536,10 @@ def main(args):
         if time_now > (ACTION_START_TIME+args.time_lim) and t_epoch == NUM_EPOCH \
                          and t_episode == (NUM_EPISODE -1):
             print('writing new csv row')
+            # publish force data
+            force_msg.data = to_force_msg(force_csv_row)
+            force_pub.publish(force_msg)
+
             force_csv_all_rows.append(force_csv_row)
             # clear csv row for next episode
             force_csv_row = []
