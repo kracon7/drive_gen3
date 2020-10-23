@@ -111,7 +111,6 @@ def main(args):
     global NUM_EPISODE
     global LAST_ACTION
 
-    tool_start = [0.483,  0.066, 0.073]
     t_epoch = args.start_epoch
     t_episode = 0
     
