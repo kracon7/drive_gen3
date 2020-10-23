@@ -136,7 +136,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')
     parser.add_argument('--output_dir', default='/home/jc/logs/realrobot', help='file to store openloop test results')
     parser.add_argument('--velocity', default=0.01, type=float, help='cartesian velocity of end effector')
-    parser.add_argument('--time_lim', default=5, type=float, help='robot action magnitude')
+    parser.add_argument('--time_lim', default=4, type=float, help='robot action magnitude')
     parser.add_argument('--zlb', default=0.05, type=float, help='lower bound of z for safe zone')
     parser.add_argument('--force_lim', default=250, type=float, help='tactile force limit')
     parser.add_argument('--start_epoch', default=0, type=int, help='number of epoch to start recording')

@@ -75,7 +75,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Record audio signal')
     parser.add_argument('--out_dir', default='/home/jc/logs/realrobot', help='output file path')
-    parser.add_argument('-t', '--time', default=5, type=int, help='lenght of time recording, in seconds')
+    parser.add_argument('-t', '--time', default=4, type=int, help='lenght of time recording, in seconds')
     parser.add_argument('--n_channel', default=1, type=int, help='number of channels') 
     parser.add_argument('--epoch', type=int, help='number of epoch')
     parser.add_argument('--episode', type=int, help='number of episode in and epoch')   

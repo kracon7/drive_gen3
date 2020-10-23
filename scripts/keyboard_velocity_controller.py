@@ -38,9 +38,9 @@ FAILED_ACTIONS = None
 # set up serial port
 port = '/dev/ttyACM0'
 arduino_port = serial.Serial(port,9600,timeout=5)
-shared_array_base = multiprocessing.Array(ctypes.c_double, 3*1)
+shared_array_base = multiprocessing.Array(ctypes.c_double, 4*1)
 shared_array = np.ctypeslib.as_array(shared_array_base.get_obj())
-shared_array = shared_array.reshape(1, 3)
+shared_array = shared_array.reshape(1, 4)
 
 def read_force(arduino_port):
     # read message from arduino port to extract forces and cast into float
@@ -62,9 +62,11 @@ def read_resistance(arduino_port):
 def arduino_process(def_param=shared_array):
     while True:
         fx, fy, fz = read_force(arduino_port)
+        resistance = read_resistance(arduino_port)
         shared_array[0,0] = fx
         shared_array[0,1] = fy
         shared_array[0,2] = fz
+        shared_array[0,3] = resistance
 
 def feedback_pose_abs(robot_name):
     feedback = rospy.wait_for_message("/" + robot_name + "/base_feedback", BaseCyclic_Feedback)
@@ -121,7 +123,8 @@ def keyboard_cb(data, cb_args):
             rospy.loginfo('ERROR: Unrecognized action command.')
             ACTION_KEY = 'none'
  
-def reset_velcro(ex, task_home=[0.483, -0.24, 0.27, 180, 0, 90]):
+def reset_velcro(ex, new_epoch_pub, new_epoch_msg,
+                 task_home=[0.483, -0.24, 0.27, 180, 0, 90]):
     user_response = raw_input("Send tool to task home position? y/n")
     if user_response == 'y' or user_response == 'Y':
         ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=6)
@@ -136,6 +139,12 @@ def reset_velcro(ex, task_home=[0.483, -0.24, 0.27, 180, 0, 90]):
                          [0.483,  0.066, 0.073]]
         for pose in pose_sequence:
             ex.send_cartesian_pose_abs(pose, task_home[3:], sleep_time=1.5)
+
+        # send user command to start new epoch
+        user_response = raw_input("Press Enter to start new epoch")
+        new_epoch_msg.data = 1
+        new_epoch_pub.publish(new_epoch_msg)
+
 
 def publish_action(twist_pub, twist_msg, velocity, action_key):
     global ACTIONS
@@ -442,12 +451,18 @@ def main(args):
     force_pub = rospy.Publisher('load_cell_force', Float32MultiArray, queue_size=1)
     force_msg = Float32MultiArray()
     
+    resistance_pub = rospy.Publisher('resistance', Int32, queue_size=1)
+    resistance_msg = Int32()
+
+    new_epoch_pub = rospy.Publisher('new_epoch_command', Int32, queue_size=1)
+    new_epoch_msg = Int32()
+    
     # turn on the arduino process for force and resistance logging
     p = multiprocessing.Process(target=arduino_process, args=())
     p.start()
     time.sleep(4)
 
-    reset_velcro(ex)
+    reset_velcro(ex, new_epoch_pub, new_epoch_msg)
 
     # check current tool pose and check validity of action
     robot_name = rospy.get_param('~robot_name',"my_gen3")
@@ -458,8 +473,11 @@ def main(args):
         time_now = time.time()
         # check force magnitude
         # read force sensor message
-        fx, fy, fz = shared_array[-1]
+        fx, fy, fz, resistance = shared_array[-1]
         force_mag = fx**2 + fy**2 + fz**2
+
+        resistance_msg.data = int(resistance)
+        resistance_pub.publish(resistance_msg)
 
         # if we are still within the operation time window
         if time_now > ACTION_START_TIME and time_now < (ACTION_START_TIME+args.time_lim):
@@ -479,7 +497,7 @@ def main(args):
                     print('here 2')
                     publish_action(twist_pub, twist_msg, args.velocity, 'none')
             elif force_mag > args.force_lim and ACTION_KEY not in FAILED_ACTIONS['key']:
-                if time_now < (ACTION_START_TIME + 0.3):
+                if time_now < (ACTION_START_TIME + 0.2):
                     print('here 3')
                     publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
                 else:
@@ -523,7 +541,7 @@ def main(args):
             traj_csv_all_rows = [tool_start]
 
             # reset the velcro by controlling the tool following a fixed trajectory
-            reset_velcro(ex)
+            reset_velcro(ex, new_epoch_pub, new_epoch_msg)
             
             t_epoch += 1
             t_episode = 0  
@@ -560,9 +578,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')
     parser.add_argument('--output_dir', default='/home/jc/logs/realrobot', help='file to store openloop test results')
     parser.add_argument('--velocity', default=0.01, type=float, help='cartesian velocity of end effector')
-    parser.add_argument('--time_lim', default=5, type=float, help='robot action magnitude')
+    parser.add_argument('--time_lim', default=4, type=float, help='robot action magnitude')
     parser.add_argument('--zlb', default=0.05, type=float, help='lower bound of z for safe zone')
-    parser.add_argument('--force_lim', default=250, type=float, help='tactile force limit')
+    parser.add_argument('--force_lim', default=200, type=float, help='tactile force limit')
     parser.add_argument('--start_epoch', default=0, type=int, help='number of epoch to start recording')
     args = parser.parse_args()
     
