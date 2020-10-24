@@ -68,7 +68,9 @@ def force_cb(force, cb_args):
 
     LAST_ACTION = chr(action)
 
-    print(resistance, chr(action))
+    print(type(force.data), type(force.data[0]))
+
+    print('Resistance: ', resistance, 'Last action', chr(action))
 
 def epoch_cb(data, cb_args):
     global ACTIONS

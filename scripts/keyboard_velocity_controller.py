@@ -12,19 +12,20 @@ import csv
 from math import pi
 from math import sin, cos
 import datetime as dt
+from scipy.spatial.transform import Rotation as R
 
 from kortex_driver.srv import *
 from kortex_driver.msg import *
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Int32, Float32MultiArray
 
-ACTIONS =  {'r': [ 0, -1,  0,  0,  0,  0],
-            'l': [ 0,  1,  0,  0,  0,  0],
-            'f': [ 1,  0,  0,  0,  0,  0],
-            'b': [-1,  0,  0,  0,  0,  0],
-            'u': [ 0,  0,  1,  0,  0,  0],
-            'd': [ 0,  0, -1,  0,  0,  0],
-            'none': [ 0,  0,  0,  0,  0,  0]}
+ACTIONS =  {'r': np.array([ 0., -1.,  0.,  0.,  0.,  0.]),
+            'l': np.array([ 0.,  1.,  0.,  0.,  0.,  0.]),
+            'f': np.array([ 1.,  0.,  0.,  0.,  0.,  0.]),
+            'b': np.array([-1.,  0.,  0.,  0.,  0.,  0.]),
+            'u': np.array([ 0.,  0.,  1.,  0.,  0.,  0.]),
+            'd': np.array([ 0.,  0., -1.,  0.,  0.,  0.]),
+            'none': np.array([ 0.,  0.,  0.,  0.,  0.,  0.])}
 ACTION_START_TIME = 0
 ACTION_KEY = 'none'
 NUM_EPOCH = 0
@@ -86,6 +87,7 @@ def write_twist_msg(twist_msg, ref_frame=0, twist=[0.,0.,0.,0.,0.,0.], duration=
     twist_msg.duration = duration
 
 def keyboard_cb(data, cb_args):
+    global ACTIONS
     global ACTION_KEY
     global ACTION_START_TIME
     global NUM_EPOCH
@@ -127,7 +129,13 @@ def reset_velcro(ex, new_epoch_pub, new_epoch_msg,
                  task_home=[0.483, -0.24, 0.27, 180, 0, 90]):
     user_response = raw_input("Send tool to task home position? y/n")
     if user_response == 'y' or user_response == 'Y':
-        ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=6)
+        # random initialize the tool rotation angles
+        # euler_tool: ez, ey, ex
+        euler_tool = [90*np.random.rand(), 30*np.random.rand(), 30*np.random.rand()]
+        rospy.loginfo('New tool rotation: {}'.format(euler_tool))
+        euler_base = euler_tool_to_base(euler_tool)
+        # send tool to task start in canonical form and then rotate
+        ex.send_cartesian_pose_abs(task_home[:3], task_home[3:],sleep_time=8)
         pose_sequence = [[0.483, -0.158, 0.251],
                          [0.483, -0.076, 0.251],
                          [0.483, -0.026, 0.180],
@@ -136,14 +144,38 @@ def reset_velcro(ex, new_epoch_pub, new_epoch_msg,
                          [0.483,  0.071, 0.105],
                          [0.483,  0.086, 0.091],
                          [0.483,  0.091, 0.06],
+                         [0.483,  0.091, 0.04],
                          [0.483,  0.066, 0.073]]
         for pose in pose_sequence:
             ex.send_cartesian_pose_abs(pose, task_home[3:], sleep_time=1.5)
+        ex.send_cartesian_pose_abs(pose_sequence[-1], euler_base, sleep_time=5)
+
+        # rotate action space
+        rotate_action_space(euler_tool)
 
         # send user command to start new epoch
         user_response = raw_input("Press Enter to start new epoch")
-        new_epoch_msg.data = 1
+        new_epoch_msg.data = euler_tool
         new_epoch_pub.publish(new_epoch_msg)
+
+def euler_tool_to_base(euler_tool):
+    R_be = R.from_euler('xyz', [180, 0, 90], degrees=True).as_dcm()
+    R_eep = R.from_euler('zyx', euler_tool, degrees=True).as_dcm()
+    R_bep = np.dot(R_be, R_eep)
+    euler_base = R.from_dcm(R_bep).as_euler('xyz', degrees=True)
+    return euler_base
+
+def rotate_action_space(euler_tool):
+    global ACTIONS
+    ez, ey, ex = euler_tool
+    R_action = R.from_euler('zxy', [-ez, ey, ex], degrees=True).as_dcm()
+    ACTIONS['r'][:3] = np.dot(R_action, np.array([0., -1., 0.]))
+    ACTIONS['l'][:3] = np.dot(R_action, np.array([0.,  1., 0.]))
+    ACTIONS['f'][:3] = np.dot(R_action, np.array([1.,  0., 0.]))
+    ACTIONS['b'][:3] = np.dot(R_action, np.array([-1., 0., 0.]))
+    ACTIONS['u'][:3] = np.dot(R_action, np.array([0.,  0., 1.]))
+    ACTIONS['d'][:3] = np.dot(R_action, np.array([0.,  0., -1.]))
+    print(ACTIONS)
 
 
 def publish_action(twist_pub, twist_msg, velocity, action_key):
@@ -264,7 +296,7 @@ class ArmController:
         # Wait a bit
         rospy.sleep(0.25)
 
-    def send_cartesian_pose_abs(self, pose, pose_theta, speed_trans=0.1, speed_orient=15, sleep_time=10):
+    def send_cartesian_pose_abs(self, pose, pose_theta, speed_trans=0.1, speed_orient=30, sleep_time=10):
     
         # Send the abusolute pose related to the base_link
         req = PlayCartesianTrajectoryRequest()
@@ -454,11 +486,12 @@ def main(args):
     resistance_pub = rospy.Publisher('resistance', Int32, queue_size=1)
     resistance_msg = Int32()
 
-    new_epoch_pub = rospy.Publisher('new_epoch_command', Int32, queue_size=1)
-    new_epoch_msg = Int32()
+    new_epoch_pub = rospy.Publisher('new_epoch_command', Float32MultiArray, queue_size=1)
+    new_epoch_msg = Float32MultiArray()
     
     # turn on the arduino process for force and resistance logging
     p = multiprocessing.Process(target=arduino_process, args=())
+    p.deamon = True
     p.start()
     time.sleep(4)
 
@@ -489,22 +522,17 @@ def main(args):
                 key_forces = [FAILED_ACTIONS['force_mag'][i] for i in key_index]
                 last_force_mag = min(key_forces)
                 print(force_mag, last_force_mag)
-                if force_mag < 0.8 * last_force_mag:
+                if force_mag < min(0.75 * last_force_mag, args.force_lim):
                     # print(force_mag, last_force_mag)
-                    print('here 1')
                     publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
                 else:
-                    print('here 2')
                     publish_action(twist_pub, twist_msg, args.velocity, 'none')
             elif force_mag > args.force_lim and ACTION_KEY not in FAILED_ACTIONS['key']:
                 if time_now < (ACTION_START_TIME + 0.2):
-                    print('here 3')
                     publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
                 else:
-                    print('here 4')
                     publish_action(twist_pub, twist_msg, args.velocity, 'none')
             else:
-                print('here 5')
                 publish_action(twist_pub, twist_msg, args.velocity, ACTION_KEY)
 
             force_csv_row.append('{} {} {}'.format(fx, fy, fz))
@@ -572,7 +600,7 @@ def main(args):
         # twist_pub.publish(twist_msg)
         rate.sleep()
 
-                
+    p.terminate()
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run robot closeloop simulation for 2000 times')

@@ -8,35 +8,45 @@ import random
 import multiprocessing
 import rospy
 import numpy as np
+import numpy.linalg as la
 import time
 import csv
 from math import pi
 from math import sin, cos
 import datetime as dt
+from scipy.spatial.transform import Rotation as R
 
 from kortex_driver.srv import *
 from kortex_driver.msg import *
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Int32, Float32MultiArray
 
-ACTIONS =  {'r': [ 0, -1,  0,  0,  0,  0],
-            'l': [ 0,  1,  0,  0,  0,  0],
-            'f': [ 1,  0,  0,  0,  0,  0],
-            'b': [-1,  0,  0,  0,  0,  0],
-            'u': [ 0,  0,  1,  0,  0,  0],
-            'd': [ 0,  0, -1,  0,  0,  0],
-            'none': [ 0,  0,  0,  0,  0,  0]}
+
+ACTIONS =  {'r': np.array([ 0., -1.,  0.,  0.,  0.,  0.]),
+            'l': np.array([ 0.,  1.,  0.,  0.,  0.,  0.]),
+            'f': np.array([ 1.,  0.,  0.,  0.,  0.,  0.]),
+            'b': np.array([-1.,  0.,  0.,  0.,  0.,  0.]),
+            'u': np.array([ 0.,  0.,  1.,  0.,  0.,  0.]),
+            'd': np.array([ 0.,  0., -1.,  0.,  0.,  0.]),
+            'none': np.array([ 0.,  0.,  0.,  0.,  0.,  0.])}
 ACTION_KEYS = {'motion': ['r', 'l', 'f', 'b', 'u', 'd'], 'reset': 'n'}
 ACTION_START_TIME = 0
 NUM_EPOCH = 0
 NUM_EPISODE = 0
 LAST_ACTION = None
+EULER_TOOL = np.array([0., 0., 0.])
 
-def weighted_sample_action():
+def weighted_sample_action(robot_name):
     global ACTION_KEYS
-    prob = np.array([2., 1., 1., 1., 2., 1.])
+    prob = np.array([2., .5, 1., 1., 2., 1.])
     index = np.random.choice(np.arange(6), p=prob/np.sum(prob))
     return ord(ACTION_KEYS['motion'][index])
+
+# def weighted_sample_action(robot_name):
+#     global ACTIONS
+#     global ACTION_KEYS
+#     global EULER_TOOL
+
 
 def feedback_pose_abs(robot_name):
     feedback = rospy.wait_for_message("/" + robot_name + "/base_feedback", BaseCyclic_Feedback)
@@ -60,30 +70,50 @@ def force_cb(force, cb_args):
         keyboard_msg.data = action
         keyboard_pub.publish(keyboard_msg)
     else:
-        action = weighted_sample_action()
-        while not action_safety(args, action, robot_name):
-            action = weighted_sample_action()
-        keyboard_msg.data = action
-        keyboard_pub.publish(keyboard_msg)
+        # check force.data and determine whether it's a weak force feedback
+        force_mag = la.norm(np.array(force.data).reshape(-1, 3), axis=1)
+        if np.amax(force_mag)**2 > (args.force_lim * 0.3):
+            action = weighted_sample_action(robot_name)
 
-    LAST_ACTION = chr(action)
+            while not action_safety(args, action, robot_name):
+                action = weighted_sample_action(robot_name)
+            keyboard_msg.data = action
+            keyboard_pub.publish(keyboard_msg)
 
-    print(resistance, chr(action))
+            LAST_ACTION = action
+        else:
+            print('Weak feedback, force magnitude is {}'.format(np.amax(force_mag)))
+            action = LAST_ACTION  
 
-def epoch_cb(data, cb_args):
+            while not action_safety(args, action, robot_name):
+                action = weighted_sample_action(robot_name)
+            keyboard_msg.data = action
+            keyboard_pub.publish(keyboard_msg)
+
+    print('Resistance: ', resistance, 'Last action', chr(action))
+
+def epoch_cb(euler, cb_args):
     global ACTIONS
     global ACTION_KEYS
     global LAST_ACTION
+    global EULER_TOOL
+
+    EULER_TOOL = np.array(euler.data)
+    rospy.loginfo('Recieved new euler tool, rotating action space....')
+    rotate_action_space()
+
     args = cb_args[0]
     robot_name = cb_args[1]
     keyboard_pub = cb_args[2]
     keyboard_msg = cb_args[3]
+
     # action = ord(random.sample(ACTION_KEYS['motion'], 1)[0])
-    action = weighted_sample_action()
+    action = weighted_sample_action(robot_name)
     while not action_safety(args, action, robot_name):
-        action = weighted_sample_action()
+        action = weighted_sample_action(robot_name)
     keyboard_msg.data = action
     keyboard_pub.publish(keyboard_msg)
+    LAST_ACTION = action
 
 def action_safety(args, action, robot_name):
     '''
@@ -101,6 +131,19 @@ def action_safety(args, action, robot_name):
         return False
     else:
         return True
+
+def rotate_action_space():
+    global ACTIONS
+    global EULER_TOOL
+    ez, ey, ex = EULER_TOOL
+    R_action = R.from_euler('zxy', [-ez, ey, ex], degrees=True).as_dcm()
+    ACTIONS['r'][:3] = np.dot(R_action, np.array([0., -1., 0.]))
+    ACTIONS['l'][:3] = np.dot(R_action, np.array([0.,  1., 0.]))
+    ACTIONS['f'][:3] = np.dot(R_action, np.array([1.,  0., 0.]))
+    ACTIONS['b'][:3] = np.dot(R_action, np.array([-1., 0., 0.]))
+    ACTIONS['u'][:3] = np.dot(R_action, np.array([0.,  0., 1.]))
+    ACTIONS['d'][:3] = np.dot(R_action, np.array([0.,  0., -1.]))
+
   
 def main(args):
     global ACTIONS
@@ -123,7 +166,7 @@ def main(args):
     robot_name = rospy.get_param('~robot_name',"my_gen3")
     rospy.Subscriber("load_cell_force", Float32MultiArray, force_cb, 
                         (args, robot_name, keyboard_pub, keyboard_msg))
-    rospy.Subscriber("new_epoch_command", Int32, epoch_cb, 
+    rospy.Subscriber("new_epoch_command", Float32MultiArray, epoch_cb, 
                         (args, robot_name, keyboard_pub, keyboard_msg))
 
 

@@ -117,7 +117,7 @@ def main(args):
             rospy.loginfo('New epoch just begins, write csv and open a new one')
             # close previous csv file and open new a new one
             ACTION_CSV.close()
-            ACTION_CSV_FILE = open(os.path.join(args.output_dir, 'epoch_{}_action.csv'.format(NUM_EPOCH)), 'w')
+            ACTION_CSV = open(os.path.join(args.output_dir, 'epoch_{}_action.csv'.format(NUM_EPOCH)), 'w')
             ACTION_CSV_WRITER = csv.writer(ACTION_CSV, delimiter=',')
             t_epoch += 1
             t_episode = 0               
