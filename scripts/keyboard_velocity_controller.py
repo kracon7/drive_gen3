@@ -131,7 +131,15 @@ def reset_velcro(ex, new_epoch_pub, new_epoch_msg,
     if user_response == 'y' or user_response == 'Y':
         # random initialize the tool rotation angles
         # euler_tool: ez, ey, ex
-        euler_tool = [90*np.random.rand(), 30*np.random.rand(), 30*np.random.rand()]
+        case = 2
+        if case == 1:
+            euler_tool = [0., 0., 0.]
+        elif case == 2:
+            euler_tool = [60 * (np.random.rand() - 0.5), 
+                          30 * (np.random.rand() - 0.5), 
+                          30 * (np.random.rand() - 0.5)]
+        elif case == 3:
+            euler_tool = [90*np.random.rand(), 30*np.random.rand(), 30*np.random.rand()]
         rospy.loginfo('New tool rotation: {}'.format(euler_tool))
         euler_base = euler_tool_to_base(euler_tool)
         # send tool to task start in canonical form and then rotate

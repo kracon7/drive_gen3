@@ -31,22 +31,37 @@ ACTIONS =  {'r': np.array([ 0., -1.,  0.,  0.,  0.,  0.]),
             'none': np.array([ 0.,  0.,  0.,  0.,  0.,  0.])}
 ACTION_KEYS = {'motion': ['r', 'l', 'f', 'b', 'u', 'd'], 'reset': 'n'}
 ACTION_START_TIME = 0
-NUM_EPOCH = 0
-NUM_EPISODE = 0
 LAST_ACTION = None
 EULER_TOOL = np.array([0., 0., 0.])
+NUM_WEAK = 0
 
-def weighted_sample_action(robot_name):
+def select_optimal(robot_name):
+    global ACTIONS
     global ACTION_KEYS
-    prob = np.array([2., .5, 1., 1., 2., 1.])
+    pose = feedback_pose_abs(robot_name)[:3]
+    vec = np.array([0.483, -0.15, 0.33]) - pose
+    a = np.zeros([6, 3])
+    for i in range(6):
+        a[i] = ACTIONS[ACTION_KEYS['motion'][i]][:3]
+    score = np.dot(a, vec)
+    key = np.argmax(score)
+    return ord(ACTION_KEYS['motion'][key])
+
+def random_sample(robot_name):
+    global ACTION_KEYS
+    prob = np.array([1., .5, 2., 2., 1., .3])
     index = np.random.choice(np.arange(6), p=prob/np.sum(prob))
     return ord(ACTION_KEYS['motion'][index])
 
-# def weighted_sample_action(robot_name):
-#     global ACTIONS
-#     global ACTION_KEYS
-#     global EULER_TOOL
-
+def weighted_sample_action(robot_name):
+    global ACTIONS
+    global ACTION_KEYS
+    p = random.random()
+    if p > 0.5:
+        return select_optimal(robot_name)
+    else:
+        return random_sample(robot_name)
+    
 
 def feedback_pose_abs(robot_name):
     feedback = rospy.wait_for_message("/" + robot_name + "/base_feedback", BaseCyclic_Feedback)
@@ -59,6 +74,7 @@ def force_cb(force, cb_args):
     global ACTIONS
     global ACTION_KEYS
     global LAST_ACTION
+    global NUM_WEAK
     args = cb_args[0]
     robot_name = cb_args[1]
     keyboard_pub = cb_args[2]
@@ -82,11 +98,19 @@ def force_cb(force, cb_args):
 
             LAST_ACTION = action
         else:
-            print('Weak feedback, force magnitude is {}'.format(np.amax(force_mag)))
-            action = LAST_ACTION  
+            NUM_WEAK += 1
+            if NUM_WEAK <= 3:
+                print('Weak feedback, force magnitude is {}'.format(np.amax(force_mag)))
+                action = LAST_ACTION  
 
-            while not action_safety(args, action, robot_name):
+                while not action_safety(args, action, robot_name):
+                    action = weighted_sample_action(robot_name)
+            else:
+                NUM_WEAK = 0
                 action = weighted_sample_action(robot_name)
+
+                while not action_safety(args, action, robot_name):
+                    action = weighted_sample_action(robot_name)
             keyboard_msg.data = action
             keyboard_pub.publish(keyboard_msg)
 
@@ -149,9 +173,6 @@ def main(args):
     global ACTIONS
     global ACTION_KEYS
     global ACTION_START_TIME 
-    global NUM_EPOCH
-    NUM_EPOCH = args.start_epoch
-    global NUM_EPISODE
     global LAST_ACTION
 
     t_epoch = args.start_epoch
@@ -182,7 +203,7 @@ if __name__ == "__main__":
     parser.add_argument('--velocity', default=0.01, type=float, help='cartesian velocity of end effector')
     parser.add_argument('--time_lim', default=4, type=float, help='robot action magnitude')
     parser.add_argument('--zlb', default=0.05, type=float, help='lower bound of z for safe zone')
-    parser.add_argument('--force_lim', default=250, type=float, help='tactile force limit')
+    parser.add_argument('--force_lim', default=200, type=float, help='tactile force limit')
     parser.add_argument('--start_epoch', default=0, type=int, help='number of epoch to start recording')
     args = parser.parse_args()
     
