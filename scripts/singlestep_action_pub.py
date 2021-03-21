@@ -49,7 +49,7 @@ def select_optimal(robot_name):
 
 def random_sample(robot_name):
     global ACTION_KEYS
-    prob = np.array([1., .5, 2., 2., 1., .3])
+    prob = np.array([1., .5, 1., 1., .6, 1.])
     index = np.random.choice(np.arange(6), p=prob/np.sum(prob))
     return ord(ACTION_KEYS['motion'][index])
 
@@ -57,7 +57,7 @@ def weighted_sample_action(robot_name):
     global ACTIONS
     global ACTION_KEYS
     p = random.random()
-    if p > 0.5:
+    if p > 0.75:
         return select_optimal(robot_name)
     else:
         return random_sample(robot_name)

@@ -57,7 +57,7 @@ def weighted_sample_action(robot_name):
     global ACTIONS
     global ACTION_KEYS
     p = random.random()
-    if p > 0.5:
+    if p > 0.6:
         return select_optimal(robot_name)
     else:
         return random_sample(robot_name)
@@ -86,33 +86,11 @@ def force_cb(force, cb_args):
         keyboard_msg.data = action
         keyboard_pub.publish(keyboard_msg)
     else:
-        # check force.data and determine whether it's a weak force feedback
-        force_mag = la.norm(np.array(force.data).reshape(-1, 3), axis=1)
-        if force_mag[-1]**2 > (args.force_lim * 0.3):
+        action = weighted_sample_action(robot_name)
+        while not action_safety(args, action, robot_name):
             action = weighted_sample_action(robot_name)
-
-            while not action_safety(args, action, robot_name):
-                action = weighted_sample_action(robot_name)
-            keyboard_msg.data = action
-            keyboard_pub.publish(keyboard_msg)
-
-            LAST_ACTION = action
-        else:
-            NUM_WEAK += 1
-            if NUM_WEAK <= 3:
-                print('Weak feedback, force magnitude is {}'.format(np.amax(force_mag)))
-                action = LAST_ACTION  
-
-                while not action_safety(args, action, robot_name):
-                    action = weighted_sample_action(robot_name)
-            else:
-                NUM_WEAK = 0
-                action = weighted_sample_action(robot_name)
-
-                while not action_safety(args, action, robot_name):
-                    action = weighted_sample_action(robot_name)
-            keyboard_msg.data = action
-            keyboard_pub.publish(keyboard_msg)
+        keyboard_msg.data = action
+        keyboard_pub.publish(keyboard_msg)
 
     print('Resistance: ', resistance, 'Last action', chr(action))
 
